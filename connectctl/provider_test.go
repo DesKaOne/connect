@@ -2,10 +2,12 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/docopt/docopt-go"
 	"github.com/urnetwork/connect"
+	"github.com/urnetwork/connect/protocol"
 )
 
 func TestProviderCommandsParse(t *testing.T) {
@@ -71,5 +73,35 @@ func TestProviderLimitFlags(t *testing.T) {
 		if cfg.maxConnection != tc.wantMax || cfg.concurrency != tc.wantConcurrency {
 			t.Errorf("args %v: got max=%d concurrency=%d", tc.args, cfg.maxConnection, cfg.concurrency)
 		}
+	}
+}
+
+
+func TestSnapshotProviderNetworkEventFiltersPayloads(t *testing.T) {
+	source := connect.SourceId(connect.NewId())
+	peer := connect.Peer{ProvideMode: protocol.ProvideMode_Network}
+	frames := []*protocol.Frame{
+		{MessageType: protocol.MessageType_IpIpPacketFromProvider, MessageBytes: []byte("PRIVATE-DATA")},
+		{MessageType: protocol.MessageType_TransferNetworkPeersUpdate, MessageBytes: []byte("peers")},
+		{MessageType: protocol.MessageType_TransferNetworkSessionsChanged, MessageBytes: []byte("sessions")},
+	}
+	snapshot := snapshotProviderNetworkEvent(source, frames, peer)
+	if snapshot == nil {
+		t.Fatal("control event was filtered out")
+	}
+	if strings.Contains(snapshot.frameSummary, "PRIVATE-DATA") || strings.Contains(snapshot.frameSummary, "IpIpPacketFromProvider") {
+		t.Fatalf("provider log exposed data-plane frame: %s", snapshot.frameSummary)
+	}
+	if !strings.Contains(snapshot.frameSummary, "TransferNetworkPeersUpdate") || !strings.Contains(snapshot.frameSummary, "TransferNetworkSessionsChanged") {
+		t.Fatalf("network control event missing: %s", snapshot.frameSummary)
+	}
+
+	// Borrowed frame bytes may be reused after the callback returns.
+	frames[1].MessageBytes = []byte("changed")
+	if strings.Contains(snapshot.frameSummary, "changed") {
+		t.Fatal("snapshot retained the borrowed frame data")
+	}
+	if filtered := snapshotProviderNetworkEvent(source, frames[:1], peer); filtered != nil {
+		t.Fatalf("data-only event should not be printed: %+v", filtered)
 	}
 }
