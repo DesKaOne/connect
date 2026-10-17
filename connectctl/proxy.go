@@ -51,7 +51,7 @@ func readProxyDotEnv(path string) (map[string]string, error) {
 		}
 		key = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(key), "export "))
 		switch key {
-		case "MAX_CONNECTION", "CONCURRENCY", "PROXY_HUB_URL", "PROXY_LIST_TXT":
+		case "MAX_CONNECTION", "CONCURRENCY", "PROXY_HUB_URL", "PROXY_LIST_TXT", "STARTUP_INTERVAL":
 		default:
 			continue
 		}
