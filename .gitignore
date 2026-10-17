@@ -17,3 +17,4 @@ security/ips.{go,txt}
 
 # Local URnetwork auth and provider identities
 .urnetwork/
+services/README.md

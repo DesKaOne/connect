@@ -1,0 +1,33 @@
+[Unit]
+Description=urNetwork Service
+Wants=network-online.target proxyhub.service
+After=network-online.target proxyhub.service
+
+[Service]
+Type=simple
+
+WorkingDirectory=/root/urnetwork
+EnvironmentFile=/root/urnetwork/.env
+
+# Tunggu ProxyHub sehat hanya jika PROXY_HUB_URL diatur.
+ExecStartPre=/bin/bash -c 'if [ -n "${PROXY_HUB_URL:-}" ]; then until curl -fsS --max-time 3 http://127.0.0.1:8080/health >/dev/null; do echo "waiting for proxyhub..."; sleep 2; done; fi'
+
+ExecStart=/root/urnetwork/urnetwork
+
+Restart=always
+RestartSec=5
+
+# Restart setelah sekitar 6 jam, dengan tambahan acak hingga 10 menit.
+RuntimeMaxSec=6h
+RuntimeRandomizedExtraSec=10m
+
+LimitNOFILE=65535
+
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
