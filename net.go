@@ -320,29 +320,12 @@ type ProxySettings struct {
 	Network string
 	Address string
 	Auth    *proxy.Auth
+	// Protocol defaults to SOCKS5 for backward compatibility.
+	Protocol ProxyProtocol
 }
 
-func (self *ProxySettings) NewDialContext(ctx context.Context, forward proxy.Dialer) DialContextFunction {
-	return func(ctx context.Context, network string, addr string) (net.Conn, error) {
-		proxyDialer, err := proxy.SOCKS5(
-			self.Network,
-			self.Address,
-			self.Auth,
-			forward,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		var conn net.Conn
-		if v, ok := proxyDialer.(proxy.ContextDialer); ok {
-			conn, err = v.DialContext(ctx, network, addr)
-		} else {
-			conn, err = proxyDialer.Dial(network, addr)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return conn, nil
-	}
+// NewDialContext constructs a TCP proxy dialer. Existing SOCKS5 callers
+// continue to work with an unset Protocol field.
+func (self *ProxySettings) NewDialContext(_ context.Context, forward proxy.Dialer) DialContextFunction {
+	return self.newProxyDialContext(forward)
 }
