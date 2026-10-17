@@ -233,7 +233,7 @@ func provide(opts docopt.Opts) {
 					Err.Printf("[provider %d] startup failed: %v; retrying in 30s", index+1, err)
 					select {
 					case <-ctx.Done(): return
-					case <-time.After(30*time.Second): continue
+					case <-time.After(5*time.Second): continue
 					}
 				}
 				route := "direct"
