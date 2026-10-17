@@ -114,14 +114,15 @@ Usage:
         --user_auth=<user_auth>
         --code=<code>
     connectctl client-id [--api_url=<api_url>] --jwt=<jwt> 
-    connectctl send [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt>
+    connectctl send [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt> [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
         --destination_id=<destination_id>
         <message>
         [--message_count=<message_count>]
         [--instance_id=<instance_id>]
-    connectctl sink [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt>
+    connectctl sink [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt> [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
         [--message_count=<message_count>]
         [--instance_id=<instance_id>]
+    connectctl proxy-check [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
     connectctl extender --jwt=<jwt> [--api_url=<api_url>]
         [--extender_key_file=<path>]
         [--listen_tcp=<port>]
@@ -151,6 +152,10 @@ Options:
     --destination_id=<destination_id>   Destination client_id
     --message_count=<message_count>  Print this many messages then exit.
     --instance_id=<instance_id>      Set the client instance id.
+    --proxy_hub_url=<url>            ProxyHub HTTP(S) base URL (also PROXY_HUB_URL).
+    --proxy_list_txt=<path>          Local proxy URL file (also PROXY_LIST_TXT).
+    --max_connection=<count>        H1 proxy transport count (also MAX_CONNECTION; default 4).
+    --concurrency=<count>           Initial connection attempt concurrency (also CONCURRENCY; default 4).
     --extender_key_file=<path>       Extender identity key file (hex seed), created when absent.
     --listen_tcp=<port>              Extender tcp carrier port (default 443).
     --listen_udp=<port>              Extender quic carrier port (default 443).
@@ -200,6 +205,8 @@ func main() {
 		send(opts)
 	} else if sink_, _ := opts.Bool("sink"); sink_ {
 		sink(opts)
+	} else if proxyCheck_, _ := opts.Bool("proxy-check"); proxyCheck_ {
+		proxyCheck(opts)
 	} else if extender_, _ := opts.Bool("extender"); extender_ {
 		extenderCommand(opts)
 	}
@@ -581,7 +588,30 @@ func send(opts docopt.Opts) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+
+	cfg, err := proxyOptions(opts)
+	if err != nil {
+		Err.Printf("proxy config: %v", err)
+		return
+	}
+	var pool *connect.ProxyPool
+	if cfg.enabled() {
+		pool, err = loadCLIProxyPool(cancelCtx, cfg)
+		if err != nil {
+			Err.Printf("proxy loading: %v", err)
+			return
+		}
+	}
+
 	clientStrategy := connect.NewClientStrategyWithDefaults(cancelCtx)
+	if pool != nil {
+		clientStrategy.Close()
+		clientStrategy, err = connect.NewProxyClientStrategy(cancelCtx, pool.Next())
+		if err != nil {
+			Err.Printf("proxy strategy: %v", err)
+			return
+		}
+	}
 	defer clientStrategy.Close()
 
 	api := connect.NewBringYourApi(cancelCtx, clientStrategy, apiUrl)
@@ -608,15 +638,24 @@ func send(opts docopt.Opts) {
 		InstanceId: instanceId,
 		AppVersion: fmt.Sprintf("connectctl %s", ConnectCtlVersion),
 	}
-	for i := 0; i < transportCount; i += 1 {
-		platformTransport := newFamilyPlatformTransportGroup(
-			cancelCtx,
-			clientStrategy,
-			client.RouteManager(),
-			connectUrl,
-			auth,
-		)
-		defer platformTransport.Close()
+	if pool == nil {
+		for i := 0; i < transportCount; i += 1 {
+			platformTransport := newFamilyPlatformTransportGroup(
+				cancelCtx,
+				clientStrategy,
+				client.RouteManager(),
+				connectUrl,
+				auth,
+			)
+			defer platformTransport.Close()
+		}
+	} else {
+		closeTransports, err := launchProxyTransports(cancelCtx, cfg, pool, client.RouteManager(), connectUrl, auth)
+		if err != nil {
+			Err.Printf("proxy transport startup: %v", err)
+			return
+		}
+		defer closeTransports()
 	}
 
 	provideModes := map[protocol.ProvideMode]bool{
@@ -726,7 +765,30 @@ func sink(opts docopt.Opts) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+
+	cfg, err := proxyOptions(opts)
+	if err != nil {
+		Err.Printf("proxy config: %v", err)
+		return
+	}
+	var pool *connect.ProxyPool
+	if cfg.enabled() {
+		pool, err = loadCLIProxyPool(cancelCtx, cfg)
+		if err != nil {
+			Err.Printf("proxy loading: %v", err)
+			return
+		}
+	}
+
 	clientStrategy := connect.NewClientStrategyWithDefaults(cancelCtx)
+	if pool != nil {
+		clientStrategy.Close()
+		clientStrategy, err = connect.NewProxyClientStrategy(cancelCtx, pool.Next())
+		if err != nil {
+			Err.Printf("proxy strategy: %v", err)
+			return
+		}
+	}
 	defer clientStrategy.Close()
 
 	api := connect.NewBringYourApi(cancelCtx, clientStrategy, apiUrl)
@@ -759,15 +821,24 @@ func sink(opts docopt.Opts) {
 		InstanceId: instanceId,
 		AppVersion: fmt.Sprintf("connectctl %s", ConnectCtlVersion),
 	}
-	for i := 0; i < transportCount; i += 1 {
-		platformTransport := newFamilyPlatformTransportGroup(
-			cancelCtx,
-			clientStrategy,
-			client.RouteManager(),
-			connectUrl,
-			auth,
-		)
-		defer platformTransport.Close()
+	if pool == nil {
+		for i := 0; i < transportCount; i += 1 {
+			platformTransport := newFamilyPlatformTransportGroup(
+				cancelCtx,
+				clientStrategy,
+				client.RouteManager(),
+				connectUrl,
+				auth,
+			)
+			defer platformTransport.Close()
+		}
+	} else {
+		closeTransports, err := launchProxyTransports(cancelCtx, cfg, pool, client.RouteManager(), connectUrl, auth)
+		if err != nil {
+			Err.Printf("proxy transport startup: %v", err)
+			return
+		}
+		defer closeTransports()
 	}
 
 	const receiveBufferSize = 256
