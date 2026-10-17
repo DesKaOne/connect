@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"bytes"
 	"encoding/json"
 	"strings"
@@ -98,5 +100,84 @@ func TestProxyPoolFirstDoesNotShiftNext(t *testing.T) {
 	}
 	if next := pool.Next(); next.Address != b.Address {
 		t.Errorf("second provider: got %s", next.Address)
+	}
+}
+
+
+func TestProviderStatsFallbackAfterServerCacheFailure(t *testing.T) {
+	ctx := context.Background()
+	postCalls := 0
+	stats, err := fetchProviderStatsWithFallback(ctx,
+		func(context.Context) ([]byte, error) {
+			return nil, &connect.HttpStatusError{
+				StatusCode: 500,
+				Status: "500 Internal Server Error",
+				Body: []byte("503 Cached response is temporarily unavailable."),
+			}
+		},
+		func(context.Context) ([]byte, error) {
+			postCalls++
+			return []byte(`{"created_time":"2026-10-17T00:00:00Z","providers":[{"client_id":"one","connected":true}]}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postCalls != 1 || stats.SourceEndpoint != statsProvidersLastNEndpoint ||
+		len(stats.Providers) != 1 || stats.Providers[0].ClientID != "one" {
+		t.Fatalf("unexpected fallback: count=%d data=%+v", postCalls, stats)
+	}
+}
+
+func TestProviderStatsNoFallbackOnAuthorizationFailure(t *testing.T) {
+	postCalls := 0
+	_, err := fetchProviderStatsWithFallback(context.Background(),
+		func(context.Context) ([]byte, error) {
+			return nil, &connect.HttpStatusError{
+				StatusCode: 403,
+				Status: "403 Forbidden",
+				Body: []byte("Not authorized"),
+			}
+		},
+		func(context.Context) ([]byte, error) {
+			postCalls++
+			return nil, nil
+		},
+	)
+	if err == nil || postCalls != 0 {
+		t.Fatalf("must not retry on unauthorized GET: err=%v postCalls=%d", err, postCalls)
+	}
+}
+
+func TestProviderStatsReportsBothServerFailures(t *testing.T) {
+	_, err := fetchProviderStatsWithFallback(context.Background(),
+		func(context.Context) ([]byte, error) {
+			return nil, &connect.HttpStatusError{StatusCode: 500, Status: "500 Server Error"}
+		},
+		func(context.Context) ([]byte, error) {
+			return nil, &connect.HttpStatusError{StatusCode: 503, Status: "503 Service Unavailable"}
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), statsProvidersEndpoint) ||
+		!strings.Contains(err.Error(), statsProvidersLastNEndpoint) ||
+		!strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected actionable error containing both endpoint failures; got %v", err)
+	}
+}
+
+func TestProviderStatsHealthyGETDoesNotUseFallback(t *testing.T) {
+	postCalls := 0
+	stats, err := fetchProviderStatsWithFallback(context.Background(),
+		func(context.Context) ([]byte, error) {
+			return []byte(`{"created_time":"2026-10-17T00:00:00Z","providers":[]}`), nil
+		},
+		func(context.Context) ([]byte, error) {
+			postCalls++
+			return nil, errors.New("should not call fallback")
+		},
+	)
+	if err != nil || postCalls != 0 || stats.SourceEndpoint != statsProvidersEndpoint {
+		t.Fatalf("healthy GET should succeed directly: err=%v postCalls=%d stats=%+v", err, postCalls, stats)
 	}
 }
