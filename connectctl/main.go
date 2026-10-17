@@ -603,9 +603,10 @@ func send(opts docopt.Opts) {
 		}
 	}
 
-	clientStrategy := connect.NewClientStrategyWithDefaults(cancelCtx)
-	if pool != nil {
-		clientStrategy.Close()
+	var clientStrategy *connect.ClientStrategy
+	if pool == nil {
+		clientStrategy = connect.NewClientStrategyWithDefaults(cancelCtx)
+	} else {
 		clientStrategy, err = connect.NewProxyClientStrategy(cancelCtx, pool.Next())
 		if err != nil {
 			Err.Printf("proxy strategy: %v", err)
@@ -780,9 +781,10 @@ func sink(opts docopt.Opts) {
 		}
 	}
 
-	clientStrategy := connect.NewClientStrategyWithDefaults(cancelCtx)
-	if pool != nil {
-		clientStrategy.Close()
+	var clientStrategy *connect.ClientStrategy
+	if pool == nil {
+		clientStrategy = connect.NewClientStrategyWithDefaults(cancelCtx)
+	} else {
 		clientStrategy, err = connect.NewProxyClientStrategy(cancelCtx, pool.Next())
 		if err != nil {
 			Err.Printf("proxy strategy: %v", err)
