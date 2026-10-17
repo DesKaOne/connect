@@ -9,3 +9,8 @@ connectctl/connectctl
 tetherctl/*.conf
 api/redoc-static.html
 security/ips.{go,txt}
+
+# Local proxy configuration (may contain credentials)
+.env
+.env.*
+proxy.txt
