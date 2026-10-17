@@ -74,3 +74,48 @@ go test -race ./...
 ```
 
 The upstream module has local replacements for `../glog`, `../gvisor`, and `./sctp`; ensure sibling checkouts match the repository layout. Tests were authored in this branch, but execution has not been verified by this change.
+
+## connectctl CLI (the actual binary)
+
+The executable is `go run ./connectctl` — **not** `go run ./cmd/urnetwork`.
+The existing `send` and `sink` subcommands work as before when no proxy
+source is specified. `proxy-check` does not require a URnetwork JWT.
+
+Create a local `.env` in the repository root (these files are gitignored):
+
+```dotenv
+MAX_CONNECTION=100
+CONCURRENCY=10
+PROXY_HUB_URL=http://127.0.0.1:8080
+PROXY_LIST_TXT=proxy.txt
+```
+
+Both proxy sources are optional; at least one must supply valid proxies when
+proxy mode is enabled. `MAX_CONNECTION` counts CLI **H1 platform transports**
+(not guaranteed successful sessions). `CONCURRENCY` bounds *initial
+connection starts* until connection registration or a 15-second allowance,
+not future reconnects. Both counts are validated between 1 and 1000.
+
+```powershell
+go run ./connectctl --help
+go run ./connectctl proxy-check
+go run ./connectctl proxy-check --proxy_list_txt=proxy.txt --max_connection=10 --concurrency=3
+go run ./connectctl sink --jwt="<CLIENT_JWT>" --message_count=1
+go run ./connectctl send --jwt="<CLIENT_JWT>" --destination_id="<DEST_CLIENT_ID>" "Hello URnetwork"
+```
+
+Flags `--proxy_hub_url`, `--proxy_list_txt`, `--max_connection`,
+and `--concurrency` may also be passed to `send` or `sink`. Flags
+override process environment, which overrides the local `.env` file.
+A client JWT with `client_id` is required for `send`/`sink` (as before).
+
+**Proxy mode does not provide UDP-based H3.** `send`/`sink` deliberately
+use H1-only transports rather than the default IPv4/IPv6 pinned group:
+the pinned group builds direct client strategies even when `ProxySettings`
+is configured. This prevents that specific bypass in CLI transport creation;
+not every SDK bootstrap or external networking path is covered by this feature.
+
+`MAX_CONNECTION=100` can consume substantial resources and may trigger
+server-side client limits. For a first live test use 1–3 and verify connections,
+IP egress and registrations before increasing it. No client account, JWT, or
+proxy is bundled in this repository.
