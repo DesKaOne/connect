@@ -32,22 +32,74 @@ type serverProviderStats struct {
 type serverProvidersResult struct {
 	CreatedTime string                `json:"created_time"`
 	Providers   []serverProviderStats `json:"providers"`
+	SourceEndpoint string `json:"-"`
+}
+
+const (
+	statsProvidersEndpoint = "/stats/providers"
+	statsProvidersLastNEndpoint = "/stats/providers-last-n"
+)
+
+func decodeServerProviderStats(body []byte, endpoint string) (*serverProvidersResult, error) {
+	var result serverProvidersResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", endpoint, err)
+	}
+	if result.Providers == nil {
+		return nil, fmt.Errorf("%s returned no providers array", endpoint)
+	}
+	result.SourceEndpoint = endpoint
+	return &result, nil
+}
+
+// A 5xx error can mean the server's cached statistics are temporarily
+// unavailable. Try the officially documented last-N-hours endpoint once.
+// Do not fallback on 401/403, invalid credentials or other client errors.
+// In particular, never replace a failed response with fabricated zeroes.
+func fetchProviderStatsWithFallback(
+	ctx context.Context,
+	get func(context.Context) ([]byte, error),
+	post func(context.Context) ([]byte, error),
+) (*serverProvidersResult, error) {
+	body, err := get(ctx)
+	if err == nil {
+		return decodeServerProviderStats(body, statsProvidersEndpoint)
+	}
+
+	var statusErr *connect.HttpStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode < 500 || statusErr.StatusCode >= 600 {
+		return nil, fmt.Errorf("GET %s: %w", statsProvidersEndpoint, err)
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	body, postErr := post(ctx)
+	if postErr != nil {
+		return nil, fmt.Errorf(
+			"URnetwork server statistics unavailable (provider connections are unaffected by this result): GET %s: %v; fallback POST %s: %w",
+			statsProvidersEndpoint, err, statsProvidersLastNEndpoint, postErr,
+		)
+	}
+	return decodeServerProviderStats(body, statsProvidersLastNEndpoint)
 }
 
 func fetchServerProviderStats(ctx context.Context, strategy *connect.ClientStrategy, apiURL, networkJWT string) (*serverProvidersResult, error) {
 	if strings.TrimSpace(networkJWT) == "" {
 		return nil, errors.New("missing network JWT for provider stats")
 	}
-	body, err := connect.HttpGetWithStrategyRaw(ctx, strategy, strings.TrimRight(apiURL, "/")+"/stats/providers", networkJWT)
-	if err != nil { return nil, err }
-	var result serverProvidersResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("decode /stats/providers: %w", err)
-	}
-	if result.Providers == nil {
-		return nil, errors.New("/stats/providers returned no providers array")
-	}
-	return &result, nil
+	base := strings.TrimRight(apiURL, "/")
+	return fetchProviderStatsWithFallback(ctx,
+		func(requestCtx context.Context) ([]byte, error) {
+			return connect.HttpGetWithStrategyRaw(requestCtx, strategy,
+				base+statsProvidersEndpoint, networkJWT)
+		},
+		func(requestCtx context.Context) ([]byte, error) {
+			// This POST response has the same StatsProvidersResult schema as GET.
+			return connect.HttpPostWithStrategyRaw(requestCtx, strategy,
+				base+statsProvidersLastNEndpoint, []byte(`{"last_n":24}`), networkJWT)
+		},
+	)
 }
 
 func printServerProviderStats(w io.Writer, stats *serverProvidersResult, localIDs map[string]int) (shown int) {
@@ -115,8 +167,8 @@ func stats(opts docopt.Opts) {
 	defer cancel()
 	result, err := fetchServerProviderStats(queryCtx, strategy, apiURL, networkJWT)
 	if err != nil { Err.Printf("stats API: %v", err); return }
-	Out.Printf("[stats] source=URnetwork API /stats/providers window=24h sampled_at=%s providers=%d",
-		result.CreatedTime, len(result.Providers))
+	Out.Printf("[stats] source=URnetwork API %s window=24h sampled_at=%s providers=%d",
+		result.SourceEndpoint, result.CreatedTime, len(result.Providers))
 	printServerProviderStats(os.Stdout, result, nil)
 }
 
@@ -228,7 +280,7 @@ func runProviderStatsReporter(ctx context.Context, interval time.Duration, apiUR
 				if err == nil && n >= 0 && n < len(metrics) { ids[record.ClientID] = n+1 }
 			}
 			store.mu.Unlock()
-			Out.Printf("[stats] source=URnetwork API window=24h sampled_at=%s", data.CreatedTime)
+			Out.Printf("[stats] source=URnetwork API %s window=24h sampled_at=%s", data.SourceEndpoint, data.CreatedTime)
 			if count := printServerProviderStats(os.Stdout, data, ids); count == 0 {
 				Out.Print("[stats] no managed provider IDs in current API response yet")
 			}
