@@ -148,3 +148,79 @@ ProxyHub instead, set `$env:PROXY_LIST_TXT = ""`. Restore it with
 but endpoint IP addresses and network errors are displayed. Do not paste
 JWTs or credential-bearing URLs into shared terminal logs. `proxy-test`
 does not guarantee that the URnetwork WebSocket or platform login will work.
+
+## connectctl public provider (distinct dashboard clients)
+
+`connectctl sink` and `send` are message-test tools. Giving them
+`--max_connection=2` creates transports **for a single Client JWT and
+one client ID**; that is not equivalent to running two providers.
+
+The new commands intentionally separate authentication from providing:
+
+```powershell
+# Use a new dashboard Auth Code; this securely prompts in PowerShell, then
+# pipes it over stdin without putting the code on the process command line.
+$secret = Read-Host "New URnetwork Auth Code" -AsSecureString
+[System.Net.NetworkCredential]::new("", $secret).Password | go run ./connectctl auth
+$secret = $null
+
+# With PROXY_HUB_URL and/or PROXY_LIST_TXT in .env:
+go run ./connectctl provide --max_connection=1 --concurrency=1
+go run ./connectctl provide --max_connection=2 --concurrency=2
+```
+
+`auth` exchanges the dashboard code via `/auth/code-login` for a **network
+JWT**, which it stores in `.urnetwork/jwt`. The file is local and gitignored.
+Do not feed an existing Client JWT to this command.
+
+`provide` uses the network JWT and calls `/network/auth-client` once per
+new provider slot. Each slot receives a distinct Client JWT and a distinct
+client ID. It configures `LocalUserNat`, `RemoteUserNatProvider`, Public
+and Network provide modes, and `ClientAuth.ProvideIntent`. All provider
+transports currently use H1/TCP. Client/instance IDs are saved under
+`.urnetwork/connectctl_providers.json` and re-used on restart. Do not
+run two provider processes with the same local ID state simultaneously.
+After a connection fails, retries reuse its client ID rather than allocating
+another. If the account's client limit is reached, startup stops for that
+slot rather than retrying continuously.
+
+`MAX_CONNECTION` counts **provider client identities**, not proxy endpoints
+or WebSocket connections. `CONCURRENCY` caps simultaneous provider setup
+requests (1–100), not reconnect attempts inside live transports. The
+actual allowed client count depends on URnetwork account limits; start with
+1–2 and verify the dashboard. All status logs distinguish registration from
+`connected=true` (which indicates registered routes). Existing `sink`
+behavior is unchanged.
+
+One Webshare rotating gateway in `proxy.txt` can be reused by many provider
+slots; whether each connection gets a distinct egress IP depends on Webshare's
+rotation/session policy.
+
+### Testing through mitmproxy
+
+A local mitmproxy server normally **intercepts TLS**. URnetwork rejects
+mitmproxy's replacement certificate unless the proxy's CA is trusted.
+Never disable certificate validation to make this work.
+
+For diagnostics, configure mitmproxy to **pass through** TLS to URnetwork.
+For example (check your mitmproxy version's CLI syntax):
+
+```powershell
+mitmweb --mode regular@8080 --ignore-hosts '^(api|connect)\.bringyour\.com:443$'
+```
+
+Use `http://127.0.0.1:8080` in the proxy list for that listener.
+For a SOCKS5 listener, use the corresponding `--mode socks5@1080`.
+Passthrough means you may see connection metadata but not decrypted TLS
+requests. Check that no other proxy process is bound to those ports.
+
+The proxy feature provides **TCP tunneling**, not UDP/ICMP over the proxy.
+That includes the platform connection and TCP NAT setup, but does not
+guarantee every UDP/ICMP payload is proxied. Use packet capture to verify
+actual egress before serving public traffic, especially through local
+mitmproxy. Do not interpret a successful client registration alone as proof
+the public provider is working.
+
+The branch was not compiled or live-tested by this document update.
+`go test ./connectctl ./...` requires repository sibling dependencies and
+the Go toolchain declared in go.mod; validate locally before any merge.
