@@ -19,17 +19,18 @@ import (
 )
 
 type providerLimitError struct{ message string }
+
 func (e *providerLimitError) Error() string { return e.message }
 
 type providerSession struct {
-	cancel context.CancelFunc
-	strategy *connect.ClientStrategy
-	api *connect.BringYourApi
-	client *connect.Client
-	transport *connect.PlatformTransport
-	nat *connect.LocalUserNat
-	provider *connect.RemoteUserNatProvider
-	clientID connect.Id
+	cancel     context.CancelFunc
+	strategy   *connect.ClientStrategy
+	api        *connect.BringYourApi
+	client     *connect.Client
+	transport  *connect.PlatformTransport
+	nat        *connect.LocalUserNat
+	provider   *connect.RemoteUserNatProvider
+	clientID   connect.Id
 	instanceID connect.Id
 }
 
@@ -48,25 +49,33 @@ func (s *providerSession) Close() {
 func authenticateProvider(ctx context.Context, api *connect.BringYourApi, known providerIdentity) (string, connect.Id, error) {
 	request := &connect.AuthNetworkClientArgs{
 		Description: "connectctl public provider",
-		DeviceSpec: "",
+		DeviceSpec:  "",
 	}
 	if known.ClientID != "" {
 		id, err := connect.ParseId(known.ClientID)
-		if err != nil { return "", connect.Id{}, err }
+		if err != nil {
+			return "", connect.Id{}, err
+		}
 		request.ClientId = &id
 	}
 	authCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 	defer stop()
 	result, err := api.AuthNetworkClientSyncWithCtx(authCtx, request)
-	if err != nil { return "", connect.Id{}, err }
-	if result == nil { return "", connect.Id{}, errors.New("empty auth-client response") }
+	if err != nil {
+		return "", connect.Id{}, err
+	}
+	if result == nil {
+		return "", connect.Id{}, errors.New("empty auth-client response")
+	}
 	if result.Error != nil {
 		if result.Error.ClientLimitExceeded || result.Error.UpgradeRequired {
 			return "", connect.Id{}, &providerLimitError{message: result.Error.Message}
 		}
 		return "", connect.Id{}, errors.New(result.Error.Message)
 	}
-	if result.ByClientJwt == "" { return "", connect.Id{}, errors.New("auth-client returned no JWT") }
+	if result.ByClientJwt == "" {
+		return "", connect.Id{}, errors.New("auth-client returned no JWT")
+	}
 	claims, err := connect.ParseByJwtUnverified(result.ByClientJwt)
 	if err != nil || claims.ClientId == (connect.Id{}) {
 		return "", connect.Id{}, errors.New("server returned an invalid client JWT")
@@ -84,7 +93,10 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 	var strategy *connect.ClientStrategy
 	if proxyConfig != nil {
 		strategy, err = connect.NewProxyClientStrategy(ownerCtx, proxyConfig)
-		if err != nil { cancel(); return nil, err }
+		if err != nil {
+			cancel()
+			return nil, err
+		}
 	} else {
 		strategy = connect.NewClientStrategyWithDefaults(ownerCtx)
 	}
@@ -97,19 +109,33 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 	defer func() {
 		if err != nil {
 			cancel()
-			if transport != nil { transport.Close() }
-			if provider != nil { provider.Close() }
-			if nat != nil { nat.Close() }
-			if client != nil { client.Close() }
+			if transport != nil {
+				transport.Close()
+			}
+			if provider != nil {
+				provider.Close()
+			}
+			if nat != nil {
+				nat.Close()
+			}
+			if client != nil {
+				client.Close()
+			}
 			api.Close()
 			strategy.Close()
 		}
 	}()
 	clientJWT, clientID, err := authenticateProvider(ownerCtx, api, known)
-	if err != nil { return nil, err }
-	if err = store.recordClient(index, known, clientID); err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
+	if err = store.recordClient(index, known, clientID); err != nil {
+		return nil, err
+	}
 	instanceID, err := connect.ParseId(known.InstanceID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	api.SetByJwt(clientJWT)
 	client = connect.NewClientWithDefaults(ownerCtx, clientID, connect.NewApiOutOfBandControlWithApi(api))
 	// Network-control events are opt-in. Off mode doesn't register a
@@ -127,15 +153,17 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 	natSettings.UdpBufferSettings.ConnectSettings = *strategy.ConnectSettings()
 	nat = connect.NewLocalUserNat(ownerCtx, clientID.String(), natSettings)
 	provider, err = connect.TryNewRemoteUserNatProvider(client, nat, connect.DefaultRemoteUserNatProviderSettings())
-	if err != nil { return nil, fmt.Errorf("start NAT provider: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("start NAT provider: %w", err)
+	}
 	client.ContractManager().SetProvideModes(map[protocol.ProvideMode]bool{
-		protocol.ProvideMode_Public: true,
+		protocol.ProvideMode_Public:  true,
 		protocol.ProvideMode_Network: true,
 	})
 	auth := &connect.ClientAuth{
-		ByJwt: clientJWT,
-		InstanceId: instanceID,
-		AppVersion: fmt.Sprintf("connectctl-provider %s", ConnectCtlVersion),
+		ByJwt:         clientJWT,
+		InstanceId:    instanceID,
+		AppVersion:    fmt.Sprintf("connectctl-provider %s", ConnectCtlVersion),
 		ProvideIntent: true,
 	}
 	// TCP/H1 mode deliberately avoids direct QUIC or pinned family transports.
@@ -153,35 +181,59 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 
 func providerDefaults(opts docopt.Opts) (proxyCLIConfig, error) {
 	cfg, err := proxyOptions(opts)
-	if err != nil { return cfg, err }
+	if err != nil {
+		return cfg, err
+	}
 	if value, err := opts.String("--max_connection"); err != nil || value == "" {
 		envValue, present := os.LookupEnv("MAX_CONNECTION")
 		if !present || strings.TrimSpace(envValue) == "" {
 			values, err := readProxyDotEnv(".env")
-			if err != nil { return cfg, err }
-			if strings.TrimSpace(values["MAX_CONNECTION"]) == "" { cfg.maxConnection = 1 }
+			if err != nil {
+				return cfg, err
+			}
+			if strings.TrimSpace(values["MAX_CONNECTION"]) == "" {
+				cfg.maxConnection = 1
+			}
 		}
 	}
-	if cfg.maxConnection > 100 {
-		return cfg, errors.New("MAX_CONNECTION for provider must be <= 100; account limits may be lower")
+	if cfg.maxConnection > 1000 {
+		return cfg, errors.New("MAX_CONNECTION for provider must be <= 1000; account limits may be lower")
 	}
-	if cfg.concurrency > cfg.maxConnection { cfg.concurrency = cfg.maxConnection }
+	if cfg.concurrency > cfg.maxConnection {
+		cfg.concurrency = cfg.maxConnection
+	}
 	return cfg, nil
 }
 
 func provide(opts docopt.Opts) {
 	cfg, err := providerDefaults(opts)
-	if err != nil { Err.Printf("provider options: %v", err); return }
+	if err != nil {
+		Err.Printf("provider options: %v", err)
+		return
+	}
 	statsInterval, err := providerStatsInterval(opts)
-	if err != nil { Err.Printf("provider stats interval: %v", err); return }
+	if err != nil {
+		Err.Printf("provider stats interval: %v", err)
+		return
+	}
 	startupInterval, err := providerStartupInterval(opts)
-	if err != nil { Err.Printf("provider startup interval: %v", err); return }
+	if err != nil {
+		Err.Printf("provider startup interval: %v", err)
+		return
+	}
 	eventMode, err := providerEventLogSetting(opts)
-	if err != nil { Err.Printf("provider event log: %v", err); return }
+	if err != nil {
+		Err.Printf("provider event log: %v", err)
+		return
+	}
 	apiURL, err := opts.String("--api_url")
-	if err != nil || apiURL == "" { apiURL = DefaultApiUrl }
+	if err != nil || apiURL == "" {
+		apiURL = DefaultApiUrl
+	}
 	connectURL, err := opts.String("--connect_url")
-	if err != nil || connectURL == "" { connectURL = DefaultConnectUrl }
+	if err != nil || connectURL == "" {
+		connectURL = DefaultConnectUrl
+	}
 	rawJWT, err := os.ReadFile(filepath.Join(".urnetwork", "jwt"))
 	if err != nil {
 		Err.Printf("network JWT not found: run connectctl auth first (%v)", err)
@@ -194,7 +246,10 @@ func provide(opts docopt.Opts) {
 		return
 	}
 	store, err := openProviderIdentities(defaultProviderIdentityPath())
-	if err != nil { Err.Printf("provider state: %v", err); return }
+	if err != nil {
+		Err.Printf("provider state: %v", err)
+		return
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var pool *connect.ProxyPool
@@ -202,10 +257,15 @@ func provide(opts docopt.Opts) {
 		loadCtx, stop := context.WithTimeout(ctx, 90*time.Second)
 		pool, err = loadCLIProxyPool(loadCtx, cfg)
 		stop()
-		if err != nil { Err.Printf("proxy loading: %v", err); return }
+		if err != nil {
+			Err.Printf("proxy loading: %v", err)
+			return
+		}
 	}
 	totalProxies := 0
-	if pool != nil { totalProxies = pool.Len() }
+	if pool != nil {
+		totalProxies = pool.Len()
+	}
 	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d STARTUP_INTERVAL=%s PROXIES=%d EVENT_LOG=%s",
 		cfg.maxConnection, cfg.concurrency, startupInterval, totalProxies, eventMode)
 	Out.Printf("[startup] at most one new provider setup begins per %s; CONCURRENCY limits setups in flight (0s disables pacing)",
@@ -235,7 +295,8 @@ func provide(opts docopt.Opts) {
 				// CONCURRENCY workers enter the startup gate together.
 				select {
 				case sem <- struct{}{}:
-				case <-ctx.Done(): return
+				case <-ctx.Done():
+					return
 				}
 				if err := pacer.wait(ctx); err != nil {
 					<-sem
@@ -248,7 +309,9 @@ func provide(opts docopt.Opts) {
 					return
 				}
 				var chosen *connect.ProxySettings
-				if pool != nil { chosen = pool.Next() }
+				if pool != nil {
+					chosen = pool.Next()
+				}
 				Out.Printf("[startup] provider=%d/%d at=%s",
 					index+1, cfg.maxConnection, time.Now().Format("15:04:05"))
 				session, err := startProvider(ctx, store, index, known, chosen, networkJWT, apiURL, connectURL, eventMode, eventCounters)
@@ -269,7 +332,9 @@ func provide(opts docopt.Opts) {
 					continue
 				}
 				route := "direct"
-				if chosen != nil { route = fmt.Sprintf("%s://%s", chosen.Protocol, chosen.Address) }
+				if chosen != nil {
+					route = fmt.Sprintf("%s://%s", chosen.Protocol, chosen.Address)
+				}
 				Out.Printf("[provider %d] registered client_id=%s instance_id=%s via %s (awaiting connection)",
 					index+1, session.clientID, session.instanceID, route)
 				lastSuccess := time.Now()
@@ -310,7 +375,6 @@ func provide(opts docopt.Opts) {
 	}
 	workers.Wait()
 }
-
 
 // attachProviderEventLogger prints the same network-control frame summary as
 // connectctl sink, with the provider index and client_id included so event
