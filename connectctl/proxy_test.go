@@ -47,7 +47,7 @@ func TestProxyConfigFlagOverridesEnvironment(t *testing.T) {
 func TestProxyConfigDotenv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte(
-		"# comment\nMAX_CONNECTION=100\nCONCURRENCY=10\nPROXY_HUB_URL=http://127.0.0.1:8080\nPROXY_LIST_TXT='proxy.txt'\n",
+		"# comment\nMAX_CONNECTION=100\nCONCURRENCY=10\nSTARTUP_INTERVAL=5\nPROXY_HUB_URL=http://127.0.0.1:8080\nPROXY_LIST_TXT='proxy.txt'\n",
 	), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestProxyConfigDotenv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values["MAX_CONNECTION"] != "100" || values["CONCURRENCY"] != "10" ||
+	if values["MAX_CONNECTION"] != "100" || values["CONCURRENCY"] != "10" || values["STARTUP_INTERVAL"] != "5" ||
 		values["PROXY_HUB_URL"] != "http://127.0.0.1:8080" || values["PROXY_LIST_TXT"] != "proxy.txt" {
 		t.Fatalf("dotenv = %#v", values)
 	}
