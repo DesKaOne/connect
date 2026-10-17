@@ -117,7 +117,7 @@ Usage:
     connectctl stats [--api_url=<api_url>] [--proxy_hub_url=<url>] [--proxy_list_txt=<path>]
     connectctl provide [--api_url=<api_url>] [--connect_url=<connect_url>]
         [--proxy_hub_url=<url>] [--proxy_list_txt=<path>]
-        [--max_connection=<count>] [--concurrency=<count>] [--stats_interval=<seconds>] [--startup_interval=<seconds>]
+        [--max_connection=<count>] [--concurrency=<count>] [--stats_interval=<seconds>] [--startup_interval=<seconds>] [--event_log=<mode>]
     connectctl client-id [--api_url=<api_url>] --jwt=<jwt> 
     connectctl send [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt> [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
         --destination_id=<destination_id>
@@ -163,6 +163,7 @@ Options:
     --max_connection=<count>        H1 proxy transport count (also MAX_CONNECTION; default 4).
     --concurrency=<count>           Initial connection attempt concurrency (also CONCURRENCY; default 4).
     --stats_interval=<seconds>       Server and local provider stats reporting interval (default 60, 0 disables).
+    --event_log=<mode>              Provider network events: off (default), summary, full. Also EVENT_LOG.
     --startup_interval=<seconds>     Seconds between provider startup attempts (default 3, 0 disables; also STARTUP_INTERVAL).
     --extender_key_file=<path>       Extender identity key file (hex seed), created when absent.
     --listen_tcp=<port>              Extender tcp carrier port (default 443).
