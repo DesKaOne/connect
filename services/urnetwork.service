@@ -1,5 +1,6 @@
+
 [Unit]
-Description=urNetwork Service
+Description=URnetwork Public Provider
 Wants=network-online.target proxyhub.service
 After=network-online.target proxyhub.service
 
@@ -9,22 +10,26 @@ Type=simple
 WorkingDirectory=/root/urnetwork
 EnvironmentFile=/root/urnetwork/.env
 
-# Tunggu ProxyHub sehat hanya jika PROXY_HUB_URL diatur.
-ExecStartPre=/bin/bash -c 'if [ -n "${PROXY_HUB_URL:-}" ]; then until curl -fsS --max-time 3 http://127.0.0.1:8080/health >/dev/null; do echo "waiting for proxyhub..."; sleep 2; done; fi'
+# Menunggu ProxyHub hanya jika PROXY_HUB_URL diatur.
+# Maksimal 20 percobaan, bukan menunggu selamanya.
+ExecStartPre=/bin/bash -c 'if [ -z "$${PROXY_HUB_URL:-}" ]; then exit 0; fi; for i in {1..20}; do curl -fsS --max-time 3 "$${PROXY_HUB_URL}/health" >/dev/null && exit 0; echo "Waiting for ProxyHub..."; sleep 2; done; echo "ProxyHub unavailable" >&2; exit 1'
 
-ExecStart=/root/urnetwork/urnetwork
+TimeoutStartSec=120
+
+# Jalankan command provide, bukan hanya binary.
+ExecStart=/root/urnetwork/urnetwork provide --stats_interval=300 --event_log=off
 
 Restart=always
-RestartSec=5
+RestartSec=15
 
-# Restart setelah sekitar 6 jam, dengan tambahan acak hingga 10 menit.
-RuntimeMaxSec=6h
-RuntimeRandomizedExtraSec=10m
+# Opsional: aktifkan hanya jika perlu restart berkala.
+# RuntimeMaxSec=6h
+# RuntimeRandomizedExtraSec=10m
 
 LimitNOFILE=65535
 
 KillSignal=SIGINT
-TimeoutStopSec=20
+TimeoutStopSec=60
 
 StandardOutput=journal
 StandardError=journal
