@@ -78,7 +78,8 @@ func authenticateProvider(ctx context.Context, api *connect.BringYourApi, known 
 }
 
 func startProvider(ctx context.Context, store *providerIdentities, index int, known providerIdentity,
-	proxyConfig *connect.ProxySettings, networkJWT, apiURL, connectURL string) (_ *providerSession, err error) {
+	proxyConfig *connect.ProxySettings, networkJWT, apiURL, connectURL string,
+	eventMode providerEventLogMode, eventCounters *providerEventCounters) (_ *providerSession, err error) {
 	ownerCtx, cancel := context.WithCancel(ctx)
 	var strategy *connect.ClientStrategy
 	if proxyConfig != nil {
@@ -111,10 +112,14 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 	if err != nil { return nil, err }
 	api.SetByJwt(clientJWT)
 	client = connect.NewClientWithDefaults(ownerCtx, clientID, connect.NewApiOutOfBandControlWithApi(api))
-	// Match connectctl sink's event output. The callback borrows Frame data:
-	// format it before returning, and never block the client's receive path.
-	// The printer terminates when this provider session is canceled.
-	attachProviderEventLogger(ownerCtx, client, index+1, clientID)
+	// Network-control events are opt-in. Off mode doesn't register a
+	// receive callback at all, avoiding console and formatting overhead.
+	switch eventMode {
+	case providerEventLogSummary:
+		attachProviderEventSummary(ownerCtx, client, eventCounters)
+	case providerEventLogFull:
+		attachProviderEventLogger(ownerCtx, client, index+1, clientID)
+	}
 	natSettings := connect.DefaultLocalUserNatSettings()
 	// TCP NAT obeys this session's selected proxy; UDP proxy egress is not
 	// implemented. Other potential direct paths need separate validation.
@@ -171,6 +176,8 @@ func provide(opts docopt.Opts) {
 	if err != nil { Err.Printf("provider stats interval: %v", err); return }
 	startupInterval, err := providerStartupInterval(opts)
 	if err != nil { Err.Printf("provider startup interval: %v", err); return }
+	eventMode, err := providerEventLogSetting(opts)
+	if err != nil { Err.Printf("provider event log: %v", err); return }
 	apiURL, err := opts.String("--api_url")
 	if err != nil || apiURL == "" { apiURL = DefaultApiUrl }
 	connectURL, err := opts.String("--connect_url")
@@ -199,12 +206,16 @@ func provide(opts docopt.Opts) {
 	}
 	totalProxies := 0
 	if pool != nil { totalProxies = pool.Len() }
-	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d STARTUP_INTERVAL=%s PROXIES=%d",
-		cfg.maxConnection, cfg.concurrency, startupInterval, totalProxies)
+	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d STARTUP_INTERVAL=%s PROXIES=%d EVENT_LOG=%s",
+		cfg.maxConnection, cfg.concurrency, startupInterval, totalProxies, eventMode)
 	Out.Printf("[startup] at most one new provider setup begins per %s; CONCURRENCY limits setups in flight (0s disables pacing)",
 		startupInterval)
 	sem := make(chan struct{}, cfg.concurrency)
 	pacer := newStartupPacer(startupInterval)
+	eventCounters := &providerEventCounters{}
+	if eventMode == providerEventLogSummary {
+		runProviderEventSummary(ctx, eventCounters)
+	}
 	metrics := make([]*providerLocalMetrics, cfg.maxConnection)
 	for i := range metrics {
 		metrics[i] = newProviderLocalMetrics(time.Now())
@@ -240,7 +251,7 @@ func provide(opts docopt.Opts) {
 				if pool != nil { chosen = pool.Next() }
 				Out.Printf("[startup] provider=%d/%d at=%s",
 					index+1, cfg.maxConnection, time.Now().Format("15:04:05"))
-				session, err := startProvider(ctx, store, index, known, chosen, networkJWT, apiURL, connectURL)
+				session, err := startProvider(ctx, store, index, known, chosen, networkJWT, apiURL, connectURL, eventMode, eventCounters)
 				<-sem
 				if err != nil {
 					metrics[index].startupFailed()
