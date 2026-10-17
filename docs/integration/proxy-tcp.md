@@ -228,28 +228,28 @@ the Go toolchain declared in go.mod; validate locally before any merge.
 
 ## Provider event logging (sink-like output)
 
-Managed \`connectctl provide\` now prints \`connected=false/true\` **only
+Managed `connectctl provide` now prints `connected=false/true` **only
 on initial observation or a state change**, instead of repeating
-\`connected=true\` every 30 seconds.
+`connected=true` every 30 seconds.
 
 Each provider also attaches a bounded, nonblocking receive callback similar
-to \`connectctl sink\`. Only these network-control frame types are printed:
+to `connectctl sink`. Only these network-control frame types are printed:
 
-- \`TransferNetworkPeersReset\`
-- \`TransferNetworkPeersUpdate\`
-- \`TransferNetworkSessionsChanged\`
+- `TransferNetworkPeersReset`
+- `TransferNetworkPeersUpdate`
+- `TransferNetworkSessionsChanged`
 
 Example, **only when the server actually sends such events**:
 
-\`\`\`text
+```text
 [provider 1] connected=true
 [provider 1 client=...] [ Network] [message_type:TransferNetworkPeersUpdate ...]
 [provider 2 client=...] [ Network] [message_type:TransferNetworkSessionsChanged ...]
-\`\`\`
+```
 
-Unlike \`sink\`, a public provider may not receive network peer-list updates:
+Unlike `sink`, a public provider may not receive network peer-list updates:
 the URnetwork platform decides which control events it sends to each client.
-**No event lines** after \`connected=true\` does not, by itself, indicate a
+**No event lines** after `connected=true` does not, by itself, indicate a
 failure.
 
 The logger does **not** print public-provider user traffic, IP packet
@@ -258,8 +258,8 @@ if the console cannot keep up, events are dropped and only the drop count is
 reported. Network-control events can still contain device/client metadata,
 so remove private identifiers before sharing terminal output.
 
-An old provider's \`Client does not exist.\` response from
-\`/network/auth-client\` is an identity/auth issue, not evidence of proxy
-network failure: the locally saved \`client_id\` may no longer exist in the
+An old provider's `Client does not exist.` response from
+`/network/auth-client` is an identity/auth issue, not evidence of proxy
+network failure: the locally saved `client_id` may no longer exist in the
 network associated with the current Network JWT. Back up the identity store
 and verify the account/network before resetting identities.
