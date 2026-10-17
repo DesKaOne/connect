@@ -277,6 +277,15 @@ provider response includes a 24-hour window:
 - `contracts_last_24h`, `clients_last_24h`: contract/client counts
 - `connected`: the server's connected status at snapshot time
 
+If GET /stats/providers receives an HTTP 5xx (including the server error
+"503 Cached response is temporarily unavailable" wrapped in a 500 response),
+the CLI makes exactly one fallback request to the documented
+POST /stats/providers-last-n with {"last_n":24}. Both return the same provider
+stats schema. It does not retry on 401/403 or malformed success responses.
+If both server endpoints fail, stats remain unavailable: the CLI prints both
+errors and does not invent uptime, transfer, or payout numbers. Local
+provider connections can remain healthy while server statistics are down.
+
 The new command fetches a single network-wide snapshot, without registering
 or connecting any provider:
 
