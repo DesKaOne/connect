@@ -3,9 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -149,6 +152,113 @@ func proxyOptions(opts docopt.Opts) (proxyCLIConfig, error) {
 	return readProxyCLIConfig(opts, dotenv)
 }
 
+// proxyTarget parses the CLI websocket backend for a TCP(+TLS) probe.
+// Probes only check the proxy tunnel and service certificate, not URnetwork auth.
+func proxyTarget(raw string) (address, tlsHost string, useTLS bool, err error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", false, err
+	}
+	if u.Hostname() == "" || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return "", "", false, fmt.Errorf("unsupported --connect_url: expected ws:// or wss://")
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "wss" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port), u.Hostname(), u.Scheme == "wss", nil
+}
+
+func probeProxy(ctx context.Context, cfg *connect.ProxySettings, address, tlsHost string, useTLS bool) error {
+	settings := connect.DefaultConnectSettings()
+	settings.ProxySettings = cfg
+	conn, err := settings.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("proxy TCP tunnel: %w", err)
+	}
+	defer conn.Close()
+	if !useTLS {
+		return nil
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: tlsHost, MinVersion: tls.VersionTLS12})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return fmt.Errorf("URnetwork TLS handshake: %w", err)
+	}
+	return nil
+}
+
+// proxyTest probes the FIRST N proxies chosen by the same pool selection as
+// sink/send. It verifies TCP and TLS, not URnetwork WebSocket authentication.
+func proxyTest(opts docopt.Opts) {
+	cfg, err := proxyOptions(opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !cfg.enabled() {
+		log.Fatal("set PROXY_HUB_URL or PROXY_LIST_TXT to test proxies")
+	}
+	connectURL, err := opts.String("--connect_url")
+	if err != nil || connectURL == "" {
+		connectURL = DefaultConnectUrl
+	}
+	address, serverName, useTLS, err := proxyTarget(connectURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := loadCLIProxyPool(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	type result struct {
+		index int
+		protocol connect.ProxyProtocol
+		address string
+		elapsed time.Duration
+		err error
+	}
+	count := min(cfg.maxConnection, pool.Len())
+	sem := make(chan struct{}, cfg.concurrency)
+	outcomes := make(chan result, count)
+	var workers sync.WaitGroup
+	for i := 0; i < count; i++ {
+		selected := pool.Next()
+		workers.Add(1)
+		go func(index int, selected *connect.ProxySettings) {
+			defer workers.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				outcomes <- result{index: index, protocol: selected.Protocol, address: selected.Address, err: ctx.Err()}
+				return
+			}
+			defer func() { <-sem }()
+			probeCtx, stop := context.WithTimeout(ctx, 12*time.Second)
+			defer stop()
+			start := time.Now()
+			err := probeProxy(probeCtx, selected, address, serverName, useTLS)
+			outcomes <- result{index: index, protocol: selected.Protocol, address: selected.Address, elapsed: time.Since(start), err: err}
+		}(i+1, selected)
+	}
+	workers.Wait()
+	close(outcomes)
+	okCount := 0
+	for r := range outcomes {
+		if r.err != nil {
+			fmt.Printf("[proxy-test %d] FAIL %s %s: %v\n", r.index, r.protocol, r.address, r.err)
+		} else {
+			okCount++
+			fmt.Printf("[proxy-test %d] OK %s %s TCP/TLS (%.1fs)\n", r.index, r.protocol, r.address, r.elapsed.Seconds())
+		}
+	}
+	fmt.Printf("Proxy tunnel probe: %d/%d reachable (URnetwork authentication not tested).\n", okCount, count)
+}
+
 func proxyCheck(opts docopt.Opts) {
 	cfg, err := proxyOptions(opts)
 	if err != nil {
@@ -207,7 +317,8 @@ func launchProxyTransports(
 			closeAll()
 			return nil, ctx.Err()
 		}
-		strategy, err := connect.NewProxyClientStrategy(ctx, pool.Next())
+		selected := pool.Next()
+		strategy, err := connect.NewProxyClientStrategy(ctx, selected)
 		if err != nil {
 			<-sem
 			closeAll()
@@ -227,6 +338,7 @@ func launchProxyTransports(
 			&connAuth, connect.TransportModeH1, transportSettings,
 		)
 		handles = append(handles, handle{strategy: strategy, transport: transport})
+		log.Printf("[proxy %d/%d] starting %s tunnel via %s (H1/TCP)", i+1, cfg.maxConnection, selected.Protocol, selected.Address)
 		leases.Add(1)
 		go func(transport *connect.PlatformTransport) {
 			defer leases.Done()
@@ -252,5 +364,32 @@ func launchProxyTransports(
 	}
 	fmt.Printf("Started %d H1 proxy transports (startup concurrency %d, pool %d).\n",
 		len(handles), cfg.concurrency, pool.Len())
+	// Connected counts come from registered routes, not transport constructors.
+	// A running sink may otherwise sit silently on a rejected/dead proxy.
+	go func(snapshot []handle) {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		previous := -1
+		for {
+			connected := 0
+			for _, h := range snapshot {
+				if h.transport.IsConnected() {
+					connected++
+				}
+			}
+			if connected != previous {
+				log.Printf("[proxy status] connected=%d/%d (count reflects URnetwork-registered routes)", connected, len(snapshot))
+				previous = connected
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if connected == 0 {
+					log.Printf("[proxy status] still 0/%d connected; check proxy-test and backend authentication", len(snapshot))
+				}
+			}
+		}
+	}(append([]handle(nil), handles...))
 	return closeAll, nil
 }
