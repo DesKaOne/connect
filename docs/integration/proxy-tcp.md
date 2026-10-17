@@ -100,6 +100,7 @@ not future reconnects. Both counts are validated between 1 and 1000.
 go run ./connectctl --help
 go run ./connectctl proxy-check
 go run ./connectctl proxy-check --proxy_list_txt=proxy.txt --max_connection=10 --concurrency=3
+go run ./connectctl proxy-test --max_connection=1 --concurrency=1
 go run ./connectctl sink --jwt="<CLIENT_JWT>" --message_count=1
 go run ./connectctl send --jwt="<CLIENT_JWT>" --destination_id="<DEST_CLIENT_ID>" "Hello URnetwork"
 ```
@@ -119,3 +120,31 @@ not every SDK bootstrap or external networking path is covered by this feature.
 server-side client limits. For a first live test use 1–3 and verify connections,
 IP egress and registrations before increasing it. No client account, JWT, or
 proxy is bundled in this repository.
+
+## Debugging missing dashboard connections
+
+`Started N H1 proxy transports` means construction only. In proxy mode,
+`connectctl` now periodically logs `[proxy status] connected=N/M`, based
+on the transport's registered route state. A value of zero means no registered
+URnetwork transport has been confirmed. The backend dashboard may have
+different refresh delays and its device rows are not one-per-transport.
+
+Run `proxy-test` before testing a JWT:
+
+```powershell
+go run ./connectctl proxy-test --max_connection=1 --concurrency=1
+```
+
+This probes the selected first proxy's TCP tunnel to the `--connect_url`
+backend and, for `wss://`, validates the TLS handshake. The command does
+not connect a WebSocket or authenticate URnetwork, but it distinguishes a
+dead proxy from a working TCP/TLS tunnel. The same pool loads the local
+file **before** ProxyHub, so the first proxy is the first valid entry in
+`proxy.txt`. To skip the file for a single PowerShell session and test
+ProxyHub instead, set `$env:PROXY_LIST_TXT = ""`. Restore it with
+`Remove-Item Env:PROXY_LIST_TXT` afterwards.
+
+**Security**: proxy credentials are not printed by the diagnostic command,
+but endpoint IP addresses and network errors are displayed. Do not paste
+JWTs or credential-bearing URLs into shared terminal logs. `proxy-test`
+does not guarantee that the URnetwork WebSocket or platform login will work.
