@@ -226,14 +226,59 @@ The branch was not compiled or live-tested by this document update.
 the Go toolchain declared in go.mod; validate locally before any merge.
 
 
+## Quiet provider logs (recommended for 10-100 providers)
+
+In provider mode, **EVENT_LOG=off is now the default**. Previously each
+provider printed every TransferNetworkSessionsChanged frame, flooding the
+console with hundreds of lines. This setting is **independent** of
+STATS_INTERVAL / --stats_interval, which controls server and local metrics
+reports.
+
+Set EVENT_LOG in the repository .env:
+
+~~~dotenv
+MAX_CONNECTION=100
+CONCURRENCY=10
+STARTUP_INTERVAL=5
+EVENT_LOG=off
+~~~
+
+Or override it for a single PowerShell run:
+
+~~~powershell
+# Quiet: connection state transitions, startup errors and periodic stats only.
+go run ./connectctl provide --max_connection=100 --concurrency=10 --event_log=off --stats_interval=300
+
+# Summary: aggregate counts of peer resets/updates/session changes every 60s.
+go run ./connectctl provide --max_connection=10 --event_log=summary --stats_interval=300
+
+# Full: log each received network-control frame (very noisy at 100 providers).
+go run ./connectctl provide --max_connection=2 --event_log=full --stats_interval=300
+~~~
+
+Modes:
+
+- off (default): no event callback is installed; no per-frame formatting,
+  buffering, or logging for provider events
+- summary: one process-wide atomic counter set and **one** 60-second
+  summary ticker; counts each network-control message type without keeping
+  payload bytes or Client IDs, and prints only if event count is nonzero
+- full: existing detailed event callback with a bounded queue and
+  provider/client ID prefix; use only for diagnostics
+
+EVENT_LOG affects **connectctl provide only**. It does not change
+connectctl sink's message logging or unrelated SDK debug logs
+(for example internal net_http.go success/error traces).
+
 ## Provider event logging (sink-like output)
 
 Managed `connectctl provide` now prints `connected=false/true` **only
 on initial observation or a state change**, instead of repeating
 `connected=true` every 30 seconds.
 
-Each provider also attaches a bounded, nonblocking receive callback similar
-to `connectctl sink`. Only these network-control frame types are printed:
+When EVENT_LOG=full is enabled, each provider attaches a bounded, nonblocking
+receive callback similar to `connectctl sink`. Only these network-control
+frame types are printed:
 
 - `TransferNetworkPeersReset`
 - `TransferNetworkPeersUpdate`
