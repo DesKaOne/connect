@@ -114,9 +114,10 @@ Usage:
         --user_auth=<user_auth>
         --code=<code>
     connectctl auth [--api_url=<api_url>]
+    connectctl stats [--api_url=<api_url>] [--proxy_hub_url=<url>] [--proxy_list_txt=<path>]
     connectctl provide [--api_url=<api_url>] [--connect_url=<connect_url>]
         [--proxy_hub_url=<url>] [--proxy_list_txt=<path>]
-        [--max_connection=<count>] [--concurrency=<count>]
+        [--max_connection=<count>] [--concurrency=<count>] [--stats_interval=<seconds>]
     connectctl client-id [--api_url=<api_url>] --jwt=<jwt> 
     connectctl send [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt> [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
         --destination_id=<destination_id>
@@ -161,6 +162,7 @@ Options:
     --proxy_list_txt=<path>          Local proxy URL file (also PROXY_LIST_TXT).
     --max_connection=<count>        H1 proxy transport count (also MAX_CONNECTION; default 4).
     --concurrency=<count>           Initial connection attempt concurrency (also CONCURRENCY; default 4).
+    --stats_interval=<seconds>       Server and local provider stats reporting interval (default 60, 0 disables).
     --extender_key_file=<path>       Extender identity key file (hex seed), created when absent.
     --listen_tcp=<port>              Extender tcp carrier port (default 443).
     --listen_udp=<port>              Extender quic carrier port (default 443).
@@ -208,6 +210,8 @@ func main() {
 		clientId(opts)
 	} else if auth_, _ := opts.Bool("auth"); auth_ {
 		auth(opts)
+	} else if stats_, _ := opts.Bool("stats"); stats_ {
+		stats(opts)
 	} else if provide_, _ := opts.Bool("provide"); provide_ {
 		provide(opts)
 	} else if send_, _ := opts.Bool("send"); send_ {
