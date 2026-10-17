@@ -13,4 +13,4 @@ security/ips.{go,txt}
 # Local proxy configuration (may contain credentials)
 .env
 .env.*
-proxy.txt
+*.txt
