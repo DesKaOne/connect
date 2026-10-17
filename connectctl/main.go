@@ -123,6 +123,7 @@ Usage:
         [--message_count=<message_count>]
         [--instance_id=<instance_id>]
     connectctl proxy-check [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
+    connectctl proxy-test [--connect_url=<connect_url>] [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
     connectctl extender --jwt=<jwt> [--api_url=<api_url>]
         [--extender_key_file=<path>]
         [--listen_tcp=<port>]
@@ -207,6 +208,8 @@ func main() {
 		sink(opts)
 	} else if proxyCheck_, _ := opts.Bool("proxy-check"); proxyCheck_ {
 		proxyCheck(opts)
+	} else if proxyTest_, _ := opts.Bool("proxy-test"); proxyTest_ {
+		proxyTest(opts)
 	} else if extender_, _ := opts.Bool("extender"); extender_ {
 		extenderCommand(opts)
 	}
