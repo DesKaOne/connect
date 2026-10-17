@@ -14,3 +14,6 @@ security/ips.{go,txt}
 .env
 .env.*
 *.txt
+
+# Local URnetwork auth and provider identities
+.urnetwork/
