@@ -269,11 +269,12 @@ func provide(opts docopt.Opts) {
 }
 
 
-// attachProviderEventLogger prints the same transferred frame summary as
+// attachProviderEventLogger prints the same network-control frame summary as
 // connectctl sink, with the provider index and client_id included so event
 // streams from distinct provider clients can be distinguished.
 //
-// Messages are not retained: callback-provided frames may be recycled when
+// Payload/data-plane frames are never logged. Messages are not retained:
+// callback-provided frames may be recycled when
 // the callback returns. Logging is bounded, and a slow console cannot stall
 // the network receive pump. Not every provider receives NetworkPeersUpdate:
 // the backend controls which events a public provider is allowed to see.
@@ -286,7 +287,10 @@ func attachProviderEventLogger(ctx context.Context, client *connect.Client, prov
 		if ctx.Err() != nil {
 			return
 		}
-		snapshot := snapshotSinkReceive(source, frames, peer)
+		snapshot := snapshotProviderNetworkEvent(source, frames, peer)
+		if snapshot == nil {
+			return
+		}
 		if !enqueueSinkReceive(events, snapshot) {
 			dropped.Add(1)
 		}
@@ -312,4 +316,26 @@ func attachProviderEventLogger(ctx context.Context, client *connect.Client, prov
 			}
 		}
 	}()
+}
+
+// snapshotProviderNetworkEvent formats the network-control frames shown by
+// connectctl sink (peer resets/updates and session changes). Provider traffic
+// can include third-party payloads: never dump data-plane frames to logs.
+func snapshotProviderNetworkEvent(source connect.TransferPath, frames []*protocol.Frame, peer connect.Peer) *sinkReceive {
+	var controlFrames []*protocol.Frame
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		switch frame.GetMessageType() {
+		case protocol.MessageType_TransferNetworkPeersReset,
+			protocol.MessageType_TransferNetworkPeersUpdate,
+			protocol.MessageType_TransferNetworkSessionsChanged:
+			controlFrames = append(controlFrames, frame)
+		}
+	}
+	if len(controlFrames) == 0 {
+		return nil
+	}
+	return snapshotSinkReceive(source, controlFrames, peer)
 }
