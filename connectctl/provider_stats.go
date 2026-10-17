@@ -65,8 +65,7 @@ func printServerProviderStats(w io.Writer, stats *serverProvidersResult, localID
 		tag := "network"
 		if index != 0 { tag = fmt.Sprintf("provider %d", index) }
 		fmt.Fprintf(w,
-			"[stats %s] client=%s server=%s uptime_24h=%.2fh transfer_24h=%.4fGiB payout_24h=%.6fUSDC contracts=%d clients=%d
-",
+			"[stats %s] client=%s server=%s uptime_24h=%.2fh transfer_24h=%.4fGiB payout_24h=%.6fUSDC contracts=%d clients=%d\n",
 			tag, entry.ClientID, online, entry.UptimeLast24h, entry.TransferDataLast24h,
 			entry.PayoutLast24h, entry.ContractsLast24h, entry.ClientsLast24h)
 		shown++
