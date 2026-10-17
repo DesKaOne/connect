@@ -113,6 +113,10 @@ Usage:
     connectctl verify-network [--api_url=<api_url>]
         --user_auth=<user_auth>
         --code=<code>
+    connectctl auth [--api_url=<api_url>]
+    connectctl provide [--api_url=<api_url>] [--connect_url=<connect_url>]
+        [--proxy_hub_url=<url>] [--proxy_list_txt=<path>]
+        [--max_connection=<count>] [--concurrency=<count>]
     connectctl client-id [--api_url=<api_url>] --jwt=<jwt> 
     connectctl send [--connect_url=<connect_url>] [--api_url=<api_url>] --jwt=<jwt> [--proxy_hub_url=<url>] [--proxy_list_txt=<path>] [--max_connection=<count>] [--concurrency=<count>]
         --destination_id=<destination_id>
@@ -202,6 +206,10 @@ func main() {
 		loginNetwork(opts)
 	} else if clientId_, _ := opts.Bool("client-id"); clientId_ {
 		clientId(opts)
+	} else if auth_, _ := opts.Bool("auth"); auth_ {
+		auth(opts)
+	} else if provide_, _ := opts.Bool("provide"); provide_ {
+		provide(opts)
 	} else if send_, _ := opts.Bool("send"); send_ {
 		send(opts)
 	} else if sink_, _ := opts.Bool("sink"); sink_ {
