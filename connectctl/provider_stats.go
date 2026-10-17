@@ -90,7 +90,7 @@ func loadNetworkJWT() (string, error) {
 
 func newStatsStrategy(ctx context.Context, pool *connect.ProxyPool) (*connect.ClientStrategy, error) {
 	if pool == nil { return connect.NewClientStrategyWithDefaults(ctx), nil }
-	return connect.NewProxyClientStrategy(ctx, pool.Next())
+	return connect.NewProxyClientStrategy(ctx, pool.First())
 }
 
 // stats is an on-demand API query that does not create any provider clients.
