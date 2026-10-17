@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,6 +111,10 @@ func startProvider(ctx context.Context, store *providerIdentities, index int, kn
 	if err != nil { return nil, err }
 	api.SetByJwt(clientJWT)
 	client = connect.NewClientWithDefaults(ownerCtx, clientID, connect.NewApiOutOfBandControlWithApi(api))
+	// Match connectctl sink's event output. The callback borrows Frame data:
+	// format it before returning, and never block the client's receive path.
+	// The printer terminates when this provider session is canceled.
+	attachProviderEventLogger(ownerCtx, client, index+1, clientID)
 	natSettings := connect.DefaultLocalUserNatSettings()
 	// TCP NAT obeys this session's selected proxy; UDP proxy egress is not
 	// implemented. Other potential direct paths need separate validation.
@@ -225,16 +230,20 @@ func provide(opts docopt.Opts) {
 				Out.Printf("[provider %d] registered client_id=%s instance_id=%s via %s (awaiting connection)",
 					index+1, session.clientID, session.instanceID, route)
 				lastSuccess := time.Now()
-				lastLog := time.Time{}
-				ticker := time.NewTicker(5*time.Second)
+				ticker := time.NewTicker(5 * time.Second)
 				lastConnected := false
+				statusKnown := false
 				retry := false
 				for !retry {
 					connected := session.transport.IsConnected()
-					if connected { lastSuccess = time.Now() }
-					if connected != lastConnected || lastLog.IsZero() || time.Since(lastLog) >= 30*time.Second {
+					if connected {
+						lastSuccess = time.Now()
+					}
+					// Report the first state and transitions only, not a
+					// repetitive connected=true heartbeat every 30 seconds.
+					if !statusKnown || connected != lastConnected {
 						Out.Printf("[provider %d] connected=%t", index+1, connected)
-						lastLog = time.Now()
+						statusKnown = true
 						lastConnected = connected
 					}
 					select {
@@ -257,4 +266,50 @@ func provide(opts docopt.Opts) {
 		}(i)
 	}
 	workers.Wait()
+}
+
+
+// attachProviderEventLogger prints the same transferred frame summary as
+// connectctl sink, with the provider index and client_id included so event
+// streams from distinct provider clients can be distinguished.
+//
+// Messages are not retained: callback-provided frames may be recycled when
+// the callback returns. Logging is bounded, and a slow console cannot stall
+// the network receive pump. Not every provider receives NetworkPeersUpdate:
+// the backend controls which events a public provider is allowed to see.
+func attachProviderEventLogger(ctx context.Context, client *connect.Client, providerIndex int, clientID connect.Id) {
+	const bufferSize = 256
+	events := make(chan *sinkReceive, bufferSize)
+	var dropped atomic.Uint64
+
+	client.AddReceiveCallback(func(source connect.TransferPath, frames []*protocol.Frame, peer connect.Peer) {
+		if ctx.Err() != nil {
+			return
+		}
+		snapshot := snapshotSinkReceive(source, frames, peer)
+		if !enqueueSinkReceive(events, snapshot) {
+			dropped.Add(1)
+		}
+	})
+
+	go func() {
+		// Event lines are emitted only on receipt, never on a timer.
+		// Drop reports are compact and throttled.
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-events:
+				Out.Printf("[provider %d client=%s] [%s %s] %s",
+					providerIndex, clientID, event.source, event.provideMode, event.frameSummary)
+			case <-ticker.C:
+				if count := dropped.Swap(0); count > 0 {
+					Err.Printf("[provider %d] dropped %d received event log entries (console is slower than network)",
+						providerIndex, count)
+				}
+			}
+		}
+	}()
 }
