@@ -238,6 +238,20 @@ func (p *ProxyPool) Next() *ProxySettings {
 	return &copied
 }
 
+// First returns the first configured proxy without advancing round-robin
+// state. Used for stats so monitoring does not shift provider assignments.
+func (p *ProxyPool) First() *ProxySettings {
+	if p == nil || len(p.configs) == 0 {
+		return nil
+	}
+	cfg := *p.configs[0]
+	if cfg.Auth != nil {
+		auth := *cfg.Auth
+		cfg.Auth = &auth
+	}
+	return &cfg
+}
+
 // NewProxyClientStrategy creates an API strategy with a stable proxy.
 // It disables optional alternative paths which could bypass a TCP proxy.
 // Note: separately constructed UDP/QUIC platform transports do not inherit
