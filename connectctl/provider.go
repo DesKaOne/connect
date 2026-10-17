@@ -169,6 +169,8 @@ func provide(opts docopt.Opts) {
 	if err != nil { Err.Printf("provider options: %v", err); return }
 	statsInterval, err := providerStatsInterval(opts)
 	if err != nil { Err.Printf("provider stats interval: %v", err); return }
+	startupInterval, err := providerStartupInterval(opts)
+	if err != nil { Err.Printf("provider startup interval: %v", err); return }
 	apiURL, err := opts.String("--api_url")
 	if err != nil || apiURL == "" { apiURL = DefaultApiUrl }
 	connectURL, err := opts.String("--connect_url")
@@ -197,8 +199,12 @@ func provide(opts docopt.Opts) {
 	}
 	totalProxies := 0
 	if pool != nil { totalProxies = pool.Len() }
-	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d PROXIES=%d", cfg.maxConnection, cfg.concurrency, totalProxies)
+	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d STARTUP_INTERVAL=%s PROXIES=%d",
+		cfg.maxConnection, cfg.concurrency, startupInterval, totalProxies)
+	Out.Printf("[startup] at most one new provider setup begins per %s; CONCURRENCY limits setups in flight (0s disables pacing)",
+		startupInterval)
 	sem := make(chan struct{}, cfg.concurrency)
+	pacer := newStartupPacer(startupInterval)
 	metrics := make([]*providerLocalMetrics, cfg.maxConnection)
 	for i := range metrics {
 		metrics[i] = newProviderLocalMetrics(time.Now())
@@ -213,14 +219,27 @@ func provide(opts docopt.Opts) {
 		go func(index int) {
 			defer workers.Done()
 			for ctx.Err() == nil {
-				known, err := store.loadOrCreate(index)
-				if err != nil { Err.Printf("[provider %d] invalid state: %v", index+1, err); return }
-				var chosen *connect.ProxySettings
-				if pool != nil { chosen = pool.Next() }
+				// Limit simultaneous initializations *and* pace their actual
+				// start times. A permit is held during waiting so at most
+				// CONCURRENCY workers enter the startup gate together.
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done(): return
 				}
+				if err := pacer.wait(ctx); err != nil {
+					<-sem
+					return
+				}
+				known, err := store.loadOrCreate(index)
+				if err != nil {
+					<-sem
+					Err.Printf("[provider %d] invalid state: %v", index+1, err)
+					return
+				}
+				var chosen *connect.ProxySettings
+				if pool != nil { chosen = pool.Next() }
+				Out.Printf("[startup] provider=%d/%d at=%s",
+					index+1, cfg.maxConnection, time.Now().Format("15:04:05"))
 				session, err := startProvider(ctx, store, index, known, chosen, networkJWT, apiURL, connectURL)
 				<-sem
 				if err != nil {
@@ -230,11 +249,13 @@ func provide(opts docopt.Opts) {
 						Err.Printf("[provider %d] server client limit: %v", index+1, err)
 						return
 					}
-					Err.Printf("[provider %d] startup failed: %v; retrying in 30s", index+1, err)
-					select {
-					case <-ctx.Done(): return
-					case <-time.After(5*time.Second): continue
+					delay := providerRetryDelay(index)
+					Err.Printf("[provider %d] startup failed: %v; retrying after %s (also subject to startup pacing)",
+						index+1, err, delay)
+					if err := waitProviderRetry(ctx, delay); err != nil {
+						return
 					}
+					continue
 				}
 				route := "direct"
 				if chosen != nil { route = fmt.Sprintf("%s://%s", chosen.Protocol, chosen.Address) }
