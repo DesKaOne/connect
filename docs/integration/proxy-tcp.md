@@ -263,3 +263,66 @@ An old provider's `Client does not exist.` response from
 network failure: the locally saved `client_id` may no longer exist in the
 network associated with the current Network JWT. Back up the identity store
 and verify the account/network before resetting identities.
+
+
+## Official provider uptime and traffic statistics
+
+The URnetwork OpenAPI specification in `api/bringyour.yml` defines
+`GET /stats/providers` with **network Bearer JWT** authentication. The
+provider response includes a 24-hour window:
+
+- `uptime_last_24h`: hours online (server measurement)
+- `transfer_data_last_24h`: GiB of data transferred
+- `payout_last_24h`: USDC paid/credited by the API
+- `contracts_last_24h`, `clients_last_24h`: contract/client counts
+- `connected`: the server's connected status at snapshot time
+
+The new command fetches a single network-wide snapshot, without registering
+or connecting any provider:
+
+```powershell
+go run ./connectctl stats
+```
+
+It uses the local network JWT in `.urnetwork/jwt`. If proxy mode is enabled,
+the request uses the **first configured proxy**, never an intentional direct
+fallback, and does not consume a provider's round-robin assignment slot.
+Dashboard-generated API credentials may differ from this network JWT: the
+documented endpoint uses Bearer JWT; we do not assume that an unspecified
+dashboard API key is interchangeable.
+
+During `provide`, summary output defaults to **once per 60 seconds**:
+
+```powershell
+go run ./connectctl provide --max_connection=2 --concurrency=2 --stats_interval=60
+```
+
+Set `--stats_interval=0` to disable periodic API/local summaries; 30 to
+3600 seconds is allowed otherwise.
+
+Example output format (illustrative values, not measured from your account):
+
+```text
+[provider 1] connected=true connect_ok=1 init_errors=0 disconnects=0
+[local 1] connected=true connect_ok=1 init_errors=0 disconnects=0 online=1m0s runtime=1m3s
+[local] connected=1/2 (since process start; not 24h server stats)
+[stats] source=URnetwork API window=24h sampled_at=...
+[stats provider 1] client=... server=online uptime_24h=7.25h transfer_24h=0.1250GiB payout_24h=0.001200USDC contracts=2 clients=1
+```
+
+Local `connect_ok` counts transitions into registered/connected state,
+`init_errors` counts initial provider setup failures, and `disconnects`
+counts transitions out of connected state. **They are not identical** to the
+SDK's internal `normal/fragment success/error` dialer counters. Local
+`online` time is accumulated since the **current process started**; it
+does not equal server-side 24-hour uptime. All managed slots are covered by
+**one API request per interval**, not one API call per client.
+
+Stats polling failures produce a warning and leave the local counters
+available. Server statistics may lag real-time events. Server stats are
+filtered to the Client IDs persisted by this manager; newly registered
+clients may not appear immediately in the provider stats API.
+
+Official API reference:
+- https://docs.ur.io/api/api-reference/stats/providers
+- https://ur.io/openapi.yml
