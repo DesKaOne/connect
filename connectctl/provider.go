@@ -167,6 +167,8 @@ func providerDefaults(opts docopt.Opts) (proxyCLIConfig, error) {
 func provide(opts docopt.Opts) {
 	cfg, err := providerDefaults(opts)
 	if err != nil { Err.Printf("provider options: %v", err); return }
+	statsInterval, err := providerStatsInterval(opts)
+	if err != nil { Err.Printf("provider stats interval: %v", err); return }
 	apiURL, err := opts.String("--api_url")
 	if err != nil || apiURL == "" { apiURL = DefaultApiUrl }
 	connectURL, err := opts.String("--connect_url")
@@ -197,6 +199,14 @@ func provide(opts docopt.Opts) {
 	if pool != nil { totalProxies = pool.Len() }
 	Out.Printf("[provider] MAX_CONNECTION=%d CONCURRENCY=%d PROXIES=%d", cfg.maxConnection, cfg.concurrency, totalProxies)
 	sem := make(chan struct{}, cfg.concurrency)
+	metrics := make([]*providerLocalMetrics, cfg.maxConnection)
+	for i := range metrics {
+		metrics[i] = newProviderLocalMetrics(time.Now())
+	}
+	runProviderStatsReporter(ctx, statsInterval, apiURL, networkJWT, pool, store, metrics)
+	if statsInterval > 0 {
+		Out.Printf("[stats] local and official 24h server summary every %s (set --stats_interval=0 to disable)", statsInterval)
+	}
 	var workers sync.WaitGroup
 	for i := 0; i < cfg.maxConnection; i++ {
 		workers.Add(1)
@@ -214,6 +224,7 @@ func provide(opts docopt.Opts) {
 				session, err := startProvider(ctx, store, index, known, chosen, networkJWT, apiURL, connectURL)
 				<-sem
 				if err != nil {
+					metrics[index].startupFailed()
 					var limit *providerLimitError
 					if errors.As(err, &limit) {
 						Err.Printf("[provider %d] server client limit: %v", index+1, err)
@@ -231,24 +242,23 @@ func provide(opts docopt.Opts) {
 					index+1, session.clientID, session.instanceID, route)
 				lastSuccess := time.Now()
 				ticker := time.NewTicker(5 * time.Second)
-				lastConnected := false
-				statusKnown := false
 				retry := false
 				for !retry {
 					connected := session.transport.IsConnected()
 					if connected {
 						lastSuccess = time.Now()
 					}
-					// Report the first state and transitions only, not a
-					// repetitive connected=true heartbeat every 30 seconds.
-					if !statusKnown || connected != lastConnected {
-						Out.Printf("[provider %d] connected=%t", index+1, connected)
-						statusKnown = true
-						lastConnected = connected
+					// Count route registrations and disconnects separately.
+					// These are not the internal SDK dialer success/error totals.
+					if metrics[index].observe(time.Now(), connected) {
+						snap := metrics[index].snapshot(time.Now())
+						Out.Printf("[provider %d] connected=%t connect_ok=%d init_errors=%d disconnects=%d",
+							index+1, connected, snap.ConnectOK, snap.StartupErrors, snap.Disconnects)
 					}
 					select {
 					case <-ctx.Done():
 						ticker.Stop()
+						metrics[index].sessionEnded(time.Now())
 						session.Close()
 						return
 					case <-ticker.C:
@@ -261,6 +271,7 @@ func provide(opts docopt.Opts) {
 					}
 				}
 				ticker.Stop()
+				metrics[index].sessionEnded(time.Now())
 				session.Close()
 			}
 		}(i)
