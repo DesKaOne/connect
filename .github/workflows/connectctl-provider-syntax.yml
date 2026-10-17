@@ -13,6 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Parse Go files
         run: |
-          for file in connectctl/auth.go connectctl/provider.go connectctl/provider_state.go connectctl/provider_test.go connectctl/provider_stats.go connectctl/provider_stats_test.go connectctl/provider_pacing.go connectctl/provider_pacing_test.go; do
+          for file in connectctl/auth.go connectctl/provider.go connectctl/provider_state.go connectctl/provider_test.go connectctl/provider_stats.go connectctl/provider_stats_test.go connectctl/provider_pacing.go connectctl/provider_pacing_test.go connectctl/provider_events.go connectctl/provider_events_test.go; do
             gofmt -e "$file" >/dev/null
           done
