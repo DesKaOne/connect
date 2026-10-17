@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -201,6 +200,5 @@ func proxySOCKS4Connect(conn net.Conn, address string, auth *proxy.Auth) (net.Co
 	if reply[0] != 0 || reply[1] != 90 {
 		return nil, fmt.Errorf("SOCKS4 connect refused: code %d", reply[1])
 	}
-	_ = binary.BigEndian // packet encodes the port in network byte order
 	return conn, nil
 }
