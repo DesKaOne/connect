@@ -335,3 +335,61 @@ clients may not appear immediately in the provider stats API.
 Official API reference:
 - https://docs.ur.io/api/api-reference/stats/providers
 - https://ur.io/openapi.yml
+
+
+## Smooth provider startup: CONCURRENCY vs STARTUP_INTERVAL
+
+For large numbers of providers, CONCURRENCY alone does **not** space out
+connections. It only limits simultaneous setup operations. If authentication
+finishes quickly, many providers can still start in a few seconds and spike
+CPU/RAM usage.
+
+Provider mode now defaults to **one new startup attempt every 3 seconds**.
+This rate limit is global across all provider slots and applies in direct or
+proxy mode, to initial setup and explicit session retry. It does not limit the
+number of **already-running** provider clients. 100 active providers can
+still require significant steady-state RAM and CPU.
+
+Configuration in .env:
+
+~~~dotenv
+MAX_CONNECTION=100
+CONCURRENCY=10
+STARTUP_INTERVAL=5
+
+# PROXY_HUB_URL=http://127.0.0.1:8080
+# PROXY_LIST_TXT=proxy.txt
+~~~
+
+STARTUP_INTERVAL is measured in whole **seconds** (0..600). With 5 seconds,
+starting 100 providers takes at least about 8 minutes 15 seconds between
+the first and last initialization attempts, plus any delay caused by slow
+network setup. Actual registration also depends on account limits.
+
+One-off CLI override:
+
+~~~powershell
+go run ./connectctl provide --max_connection=10 --concurrency=2 --startup_interval=5
+~~~
+
+- MAX_CONNECTION is the number of logical provider client identities.
+- CONCURRENCY limits simultaneous startup/authentication operations.
+- STARTUP_INTERVAL spaces out their starting times even if spare concurrency
+  is available. 0 disables pacing, bringing back the burst-prone behavior.
+- Failed initializations wait 30-39 seconds (staggered by provider slot),
+  then reenter the global pacer. Explicit session recreation after prolonged
+  offline status also passes through it.
+- Automatic low-level transport reconnections **inside an active provider**
+  are not controlled by this startup pacer.
+
+Check the console for startup markers of the form:
+
+~~~text
+[startup] provider=1/100 at=23:30:00
+[startup] provider=2/100 at=23:30:05
+[startup] provider=3/100 at=23:30:10
+~~~
+
+For a small Windows machine, begin with 10 provider slots, CONCURRENCY=1-2
+and STARTUP_INTERVAL=5-10, then scale only if steady-state RAM/CPU is
+acceptable. Monitor Task Manager in addition to connection stats.
