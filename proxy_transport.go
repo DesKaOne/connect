@@ -3,6 +3,7 @@ package connect
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,14 +17,15 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ProxyProtocol is the TCP proxy handshake protocol. HTTPS proxy URLs are not
-// accepted: HTTP CONNECT here means a plaintext connection to the proxy.
+// ProxyProtocol identifies how the client connects to the proxy.
+// HTTPS means verified TLS to the proxy followed by HTTP CONNECT.
 type ProxyProtocol string
 
 const (
 	ProxyProtocolSOCKS5 ProxyProtocol = "socks5"
 	ProxyProtocolSOCKS4 ProxyProtocol = "socks4"
 	ProxyProtocolHTTP   ProxyProtocol = "http"
+	ProxyProtocolHTTPS  ProxyProtocol = "https"
 )
 
 const proxyHandshakeTimeout = 15 * time.Second
@@ -61,7 +63,7 @@ func (self *ProxySettings) newProxyDialContext(forward proxy.Dialer) DialContext
 				return withContext.DialContext(ctx, network, addr)
 			}
 			return nil, errors.New("SOCKS5 dialer does not support context cancellation")
-		case ProxyProtocolSOCKS4, ProxyProtocolHTTP:
+		case ProxyProtocolSOCKS4, ProxyProtocolHTTP, ProxyProtocolHTTPS:
 			if self.Protocol == ProxyProtocolSOCKS4 && self.Auth != nil && self.Auth.Password != "" {
 				return nil, errors.New("SOCKS4 does not support password authentication")
 			}
@@ -82,9 +84,20 @@ func (self *ProxySettings) newProxyDialContext(forward proxy.Dialer) DialContext
 				return nil, err
 			}
 			var result net.Conn
-			if protocol == ProxyProtocolHTTP {
+			switch protocol {
+			case ProxyProtocolHTTPS:
+				// The TLS connection is to the proxy, not the destination.
+				// Verify its certificate against the proxy host. Never silently
+				// fall back to a plaintext HTTP proxy if TLS validation fails.
+				var tlsConn *tls.Conn
+				tlsConn, err = proxyTLSConnect(ctx, conn, self.Address, nil)
+				if err == nil {
+					conn = tlsConn
+					result, err = proxyHTTPConnect(conn, addr, self.Auth)
+				}
+			case ProxyProtocolHTTP:
 				result, err = proxyHTTPConnect(conn, addr, self.Auth)
-			} else {
+			default:
 				result, err = proxySOCKS4Connect(conn, addr, self.Auth)
 			}
 			if err == nil {
@@ -102,6 +115,32 @@ func (self *ProxySettings) newProxyDialContext(forward proxy.Dialer) DialContext
 			return nil, fmt.Errorf("unsupported proxy protocol %q", protocol)
 		}
 	}
+}
+
+// proxyTLSConnect negotiates an authenticated TLS connection with the HTTPS
+// proxy. A supplied config is only for trusted private proxy CAs / tests;
+// production callers use standard root certificates and hostname validation.
+func proxyTLSConnect(ctx context.Context, conn net.Conn, proxyAddress string, tlsConfig *tls.Config) (*tls.Conn, error) {
+	proxyHost, _, err := net.SplitHostPort(proxyAddress)
+	if err != nil || strings.TrimSpace(proxyHost) == "" {
+		return nil, fmt.Errorf("invalid HTTPS proxy address")
+	}
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	if tlsConfig.ServerName == "" {
+		tlsConfig.ServerName = proxyHost
+	}
+	if tlsConfig.MinVersion == 0 {
+		tlsConfig.MinVersion = tls.VersionTLS12
+	}
+	secureConn := tls.Client(conn, tlsConfig)
+	if err := secureConn.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("HTTPS proxy TLS handshake: %w", err)
+	}
+	return secureConn, nil
 }
 
 func proxyForwardDial(ctx context.Context, forward proxy.Dialer, address string) (net.Conn, error) {

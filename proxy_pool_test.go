@@ -19,14 +19,15 @@ import (
 
 func TestParseProxySettings(t *testing.T) {
 	cases := []struct {
-		raw string
+		raw  string
 		want ProxyProtocol
-		ok bool
+		ok   bool
 	}{
 		{"socks5://user:pass@127.0.0.1:1080", ProxyProtocolSOCKS5, true},
 		{"socks4://127.0.0.1:1080", ProxyProtocolSOCKS4, true},
 		{"http://user:pass@127.0.0.1:8080", ProxyProtocolHTTP, true},
-		{"https://127.0.0.1:443", "", false},
+		{"https://user:pass@127.0.0.1:8443", ProxyProtocolHTTPS, true},
+		{"https://127.0.0.1:443", ProxyProtocolHTTPS, true},
 		{"socks4://user:password@127.0.0.1:1080", "", false},
 		{"http://127.0.0.1:0", "", false},
 		{"http://127.0.0.1:99999", "", false},
@@ -82,6 +83,8 @@ func TestProxyHubFetchOnce(t *testing.T) {
 			io.WriteString(w, `{"total_pages":1,"proxies":[{"address":"127.0.0.1:1080"}]}`)
 		case "/proxy/http":
 			io.WriteString(w, `{"total_pages":1,"proxies":[{"address":"127.0.0.1:8080"}]}`)
+		case "/proxy/https":
+			io.WriteString(w, `{"total_pages":1,"proxies":[{"address":"127.0.0.1:8443"}]}`)
 		default:
 			io.WriteString(w, `{"total_pages":1,"proxies":[]}`)
 		}
@@ -89,8 +92,17 @@ func TestProxyHubFetchOnce(t *testing.T) {
 	defer hub.Close()
 	client := &ProxyHubClient{BaseURL: hub.URL}
 	proxies, err := client.FetchOnce(context.Background())
-	if err != nil || len(proxies) != 2 {
+	if err != nil || len(proxies) != 3 {
 		t.Fatalf("proxies = %d, err = %v", len(proxies), err)
+	}
+	var foundHTTPS bool
+	for _, cfg := range proxies {
+		if cfg.Protocol == ProxyProtocolHTTPS && cfg.Address == "127.0.0.1:8443" {
+			foundHTTPS = true
+		}
+	}
+	if !foundHTTPS {
+		t.Fatalf("HTTPS proxy was not discovered: %+v", proxies)
 	}
 }
 

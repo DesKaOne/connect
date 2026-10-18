@@ -19,7 +19,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ParseProxySettings accepts socks5://, socks4:// and http:// proxy URLs.
+// ParseProxySettings accepts socks5://, socks4://, http:// and https:// proxy URLs.
 // Percent-encode reserved characters inside usernames and passwords.
 func ParseProxySettings(raw string) (*ProxySettings, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
@@ -37,6 +37,8 @@ func ParseProxySettings(raw string) (*ProxySettings, error) {
 		proto = ProxyProtocolSOCKS4
 	case "http":
 		proto = ProxyProtocolHTTP
+	case "https":
+		proto = ProxyProtocolHTTPS
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 	}
@@ -95,8 +97,8 @@ func LoadProxyFile(path string) ([]*ProxySettings, error) {
 // ProxyHubClient fetches an alive-proxy list from an operator-supplied API.
 // FetchOnce makes one bounded pass; callers can schedule future refreshes.
 type ProxyHubClient struct {
-	BaseURL string
-	Client *http.Client
+	BaseURL  string
+	Client   *http.Client
 	MaxPages int // 0 defaults to 20 pages per protocol
 }
 
@@ -121,7 +123,7 @@ func (h *ProxyHubClient) FetchOnce(ctx context.Context) ([]*ProxySettings, error
 	}
 	var configs []*ProxySettings
 	var problems []error
-	for _, protocol := range []ProxyProtocol{ProxyProtocolSOCKS5, ProxyProtocolHTTP, ProxyProtocolSOCKS4} {
+	for _, protocol := range []ProxyProtocol{ProxyProtocolSOCKS5, ProxyProtocolHTTP, ProxyProtocolHTTPS, ProxyProtocolSOCKS4} {
 		for page := 1; page <= maxPages; page++ {
 			endpoint := *base
 			endpoint.Path = strings.TrimRight(base.Path, "/") + "/proxy/" + string(protocol)
@@ -146,7 +148,7 @@ func (h *ProxyHubClient) FetchOnce(ctx context.Context) ([]*ProxySettings, error
 			}
 			var body struct {
 				TotalPages int `json:"total_pages"`
-				Proxies []struct {
+				Proxies    []struct {
 					Address string `json:"address"`
 				} `json:"proxies"`
 			}
@@ -207,7 +209,7 @@ func DeduplicateProxies(input []*ProxySettings) []*ProxySettings {
 // rotate an active TCP connection; call Next before constructing a new client.
 type ProxyPool struct {
 	configs []*ProxySettings
-	next atomic.Uint64
+	next    atomic.Uint64
 }
 
 func NewProxyPool(configs []*ProxySettings) (*ProxyPool, error) {

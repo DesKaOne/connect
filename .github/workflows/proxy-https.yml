@@ -1,0 +1,42 @@
+name: HTTPS Proxy Regression
+
+on:
+  pull_request:
+    branches:
+      - feature/proxy-hub-multi-proxy
+    paths:
+      - proxy_pool.go
+      - proxy_transport.go
+      - proxy_pool_test.go
+      - proxy_https_test.go
+      - .github/testfixtures/proxy_stubs.go
+      - .github/workflows/proxy-https.yml
+  workflow_dispatch:
+
+jobs:
+  proxy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check Go formatting
+        run: |
+          test -z "$(gofmt -l proxy_pool.go proxy_transport.go proxy_pool_test.go proxy_https_test.go)"
+      - name: Test isolated proxy logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Full connect tests require ../glog and ../gvisor, which are not
+          # present on a vanilla Actions runner. Copy only the unchanged
+          # production proxy sources plus small type stubs to a test module.
+          fixture="$(mktemp -d)"
+          cp proxy_pool.go proxy_transport.go proxy_pool_test.go proxy_https_test.go "$fixture/"
+          cp .github/testfixtures/proxy_stubs.go "$fixture/proxy_stubs.go"
+          cd "$fixture"
+          go mod init example.com/connect-https-proxy-regression
+          go get golang.org/x/net@v0.57.0
+          go test -v -count=1 -timeout=3m .
