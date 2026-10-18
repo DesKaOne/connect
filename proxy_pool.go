@@ -19,7 +19,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ParseProxySettings accepts socks5://, socks4:// and http:// proxy URLs.
+// ParseProxySettings accepts socks5://, socks4://, http:// and https:// proxy URLs.
 // Percent-encode reserved characters inside usernames and passwords.
 func ParseProxySettings(raw string) (*ProxySettings, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
@@ -37,6 +37,8 @@ func ParseProxySettings(raw string) (*ProxySettings, error) {
 		proto = ProxyProtocolSOCKS4
 	case "http":
 		proto = ProxyProtocolHTTP
+	case "https":
+		proto = ProxyProtocolHTTPS
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 	}
@@ -121,7 +123,7 @@ func (h *ProxyHubClient) FetchOnce(ctx context.Context) ([]*ProxySettings, error
 	}
 	var configs []*ProxySettings
 	var problems []error
-	for _, protocol := range []ProxyProtocol{ProxyProtocolSOCKS5, ProxyProtocolHTTP, ProxyProtocolSOCKS4} {
+	for _, protocol := range []ProxyProtocol{ProxyProtocolSOCKS5, ProxyProtocolHTTP, ProxyProtocolHTTPS, ProxyProtocolSOCKS4} {
 		for page := 1; page <= maxPages; page++ {
 			endpoint := *base
 			endpoint.Path = strings.TrimRight(base.Path, "/") + "/proxy/" + string(protocol)
