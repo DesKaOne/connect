@@ -97,8 +97,8 @@ func LoadProxyFile(path string) ([]*ProxySettings, error) {
 // ProxyHubClient fetches an alive-proxy list from an operator-supplied API.
 // FetchOnce makes one bounded pass; callers can schedule future refreshes.
 type ProxyHubClient struct {
-	BaseURL string
-	Client *http.Client
+	BaseURL  string
+	Client   *http.Client
 	MaxPages int // 0 defaults to 20 pages per protocol
 }
 
@@ -148,7 +148,7 @@ func (h *ProxyHubClient) FetchOnce(ctx context.Context) ([]*ProxySettings, error
 			}
 			var body struct {
 				TotalPages int `json:"total_pages"`
-				Proxies []struct {
+				Proxies    []struct {
 					Address string `json:"address"`
 				} `json:"proxies"`
 			}
@@ -209,7 +209,7 @@ func DeduplicateProxies(input []*ProxySettings) []*ProxySettings {
 // rotate an active TCP connection; call Next before constructing a new client.
 type ProxyPool struct {
 	configs []*ProxySettings
-	next atomic.Uint64
+	next    atomic.Uint64
 }
 
 func NewProxyPool(configs []*ProxySettings) (*ProxyPool, error) {

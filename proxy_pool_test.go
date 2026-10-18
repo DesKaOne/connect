@@ -19,9 +19,9 @@ import (
 
 func TestParseProxySettings(t *testing.T) {
 	cases := []struct {
-		raw string
+		raw  string
 		want ProxyProtocol
-		ok bool
+		ok   bool
 	}{
 		{"socks5://user:pass@127.0.0.1:1080", ProxyProtocolSOCKS5, true},
 		{"socks4://127.0.0.1:1080", ProxyProtocolSOCKS4, true},
